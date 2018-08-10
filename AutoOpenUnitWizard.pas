@@ -10,13 +10,19 @@
 //
 // -------------------------------------------------------------------------
 
+{$T+}
+{$PointerMath ON}
+{$WARN SYMBOL_PLATFORM OFF}
+
 unit AutoOpenUnitWizard;
 
 interface
 
 Uses
   SysUtils, Classes, ToolsAPI,
-  menus, dialogs, consts, contnrs, registry, windows, Forms, StrUtils;
+//  menus, dialogs, consts, contnrs, registry, windows,
+  Forms, // Application
+  StrUtils;
 
 Type
   TAutoOpenUnitExpert = class(TNotifierObject, IOTAWizard)
@@ -35,21 +41,25 @@ Type
 Procedure Register;
 
 implementation
+uses IOUtils;
 
 Procedure Register;
 Begin
   RegisterPackageWizard(TAutoOpenUnitExpert.Create);
 End;
 
-function ScanFF(const Source,Search:String;Start:Integer):Integer;
+
+function ScanFF(const Source, Search:String; const Start: Integer; const SkipTag: boolean):Integer;
 Var
   p: PChar;
 Begin
+  if SkipTag
+     then Result := Length( Search )
+     else Result := 0;
   p := SearchBuf(PChar(Source), Length(Source), 0, Start-1, Search);
-  If p = Nil then
-    Result := 0
-  else
-    Result := p-PChar(Source) + 1;
+  if p = Nil
+     then Result := 0 // regardless of Skip flag
+     else Inc( Result, p-PChar(Source) + 1);
 end;
 
 
@@ -86,6 +96,7 @@ Type
 
 constructor TAutoOpenUnitExpert.Create;
 begin
+  inherited;
   OpenFileNotifier := TOpenFileIDENotifier.Create;
   NotifierIndex := (BorlandIDEServices as IOTAServices).AddNotifier(OpenFileNotifier)
 end;
@@ -144,40 +155,71 @@ begin
 
 end;
 
+function AOU_Tag(const Cmt:Byte): string; inline;
+Const CmtTag = 'AutoOpenUnit';
+begin
+  case Cmt of
+    1:   Result := '{' + CmtTag + ' ';
+    2:   Result := '(*' + CmtTag + ' ';
+    else Result := '';
+  end;
+end;
+
+// PROBLEM: when i save&close the test project while having
+//   .dprfile as the only tab in the editor
+//   and then re-open the project
+//   there are notifications for .dproj, .dsk, .groupproj
+//   but there is just NO notifications for auto-loaded .dpr !!!
+
+// PROBLEM: at least in XE2 when you open .DPROJ file there comes
+//   NO notification about opening .DPR or .DPK file at all!!!
+
+// PROBLEM: at least in XE2 there is no Project -> View Source notification
+
+// <MainSource>AOU_Test.dpr</MainSource>
+
 procedure TOpenFileIDENotifier.FileNotification(
   NotifyCode: TOTAFileNotification; const FileName: string;
   var Cancel: Boolean);
 Var
-  FileContent: TStringList;
-  TagStart: Integer;
+  FileContent: string;
+  TagStart, TagStart2: Integer;
   TagEnd: Integer;
   UnitName: string;
   FileNameToOpen: string;
+  EndTag: string;
 begin
-  FileContent := TStringList.Create;
-  Try
-    TagEnd := 0;
-    If (NotifyCode = ofnFileOpening) then
-    Begin
-      Repeat
-        If Not FileExists(FileName) Then
-          Exit;
-        FileContent.LoadFromFile(FileName);
-        TagStart := ScanFF(FileContent.Text, '{AutoOpenUnit ', TagEnd + 1);
-        If TagStart > 0 then
-        Begin
-          TagEnd := ScanFF(FileContent.Text, '}', TagStart + 1);
-          UnitName := Copy(FileContent.Text, TagStart + 14, TagEnd - TagStart - 14);
-          FileNameToOpen := FindUnit(UnitName);
+  If NotifyCode <> ofnFileOpening then
+     Exit;
+  If Not FileExists(FileName) Then
+    Exit;
 
-          If FileNameToOpen <> '' then
-            (BorlandIDEServices as IOTAActionServices).OpenFile(FileNameToOpen);
-        End;
-      Until TagStart = 0;
+  TagEnd := 0;
+  FileContent := TFile.ReadAllText(FileName);
+  // re-reading file into TStringList on every REPEAT-UNTIL iteration was crazy
+  // calling TStringList.GetText thrice on every iteration was crazy
+  // also TStringList is slow and heavy (heap fragmentation)
+
+  Repeat
+    TagStart := ScanFF(FileContent, AOU_Tag(1), TagEnd + 1, True);
+    TagStart2 := ScanFF(FileContent, AOU_Tag(2), TagEnd + 1, True);
+    if (TagStart2 > 0) and
+       ((TagStart2 < TagStart) or (TagStart <= 0)) then begin
+      TagStart := TagStart2;
+      EndTag := '*)';
+    end else
+      EndTag := '}';
+
+    If TagStart > 0 then
+    Begin
+      TagEnd := ScanFF(FileContent, EndTag, TagStart + 1, False);
+      UnitName := Trim(Copy(FileContent, TagStart, TagEnd - TagStart));
+      FileNameToOpen := FindUnit(UnitName);
+
+      If FileNameToOpen <> '' then
+        (BorlandIDEServices as IOTAActionServices).OpenFile(FileNameToOpen);
     End;
-  Finally
-    FileContent.Free;
-  End;
+  Until TagStart = 0;
 end;
 
 function TOpenFileIDENotifier.FindUnit(UnitName: string): string;
