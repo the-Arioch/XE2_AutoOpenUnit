@@ -79,6 +79,8 @@ Type
 
   TOpenFileIDENotifier = Class(TInterfacedObject, IOTAIDENotifier)
   Private
+    DPROJ_Opening, DPROJ_ProjSource: string;
+
     Function FindUnit(UnitName: string): string;
   Public
     procedure FileNotification(NotifyCode: TOTAFileNotification;
@@ -176,8 +178,6 @@ end;
 
 // PROBLEM: at least in XE2 there is no Project -> View Source notification
 
-// <MainSource>AOU_Test.dpr</MainSource>
-
 procedure TOpenFileIDENotifier.FileNotification(
   NotifyCode: TOTAFileNotification; const FileName: string;
   var Cancel: Boolean);
@@ -189,16 +189,51 @@ Var
   FileNameToOpen: string;
   EndTag: string;
 begin
+
+  // Problem #2 hack
+  if NotifyCode = ofnFileOpened then
+     if DPROJ_Opening > '' then
+       if FileName = DPROJ_Opening then
+       begin
+          DPROJ_Opening := '';
+          FileNotification(ofnFileOpening, DPROJ_ProjSource, Cancel);
+          exit;
+       end;
+
   If NotifyCode <> ofnFileOpening then
      Exit;
   If Not FileExists(FileName) Then
     Exit;
+
+  // no Problem #2 -> no hack needed
+  if DPROJ_ProjSource > '' then
+    if FileName = DPROJ_ProjSource then
+    begin
+      DPROJ_Opening := '';
+      DPROJ_ProjSource := '';
+    end;
 
   TagEnd := 0;
   FileContent := TFile.ReadAllText(FileName);
   // re-reading file into TStringList on every REPEAT-UNTIL iteration was crazy
   // calling TStringList.GetText thrice on every iteration was crazy
   // also TStringList is slow and heavy (heap fragmentation)
+
+  // Problem #2 hack registering
+  if EndsText('.dproj', FileName) then begin
+     DPROJ_Opening := FileName;
+
+     TagStart := ScanFF(FileContent, '<MainSource>', TagEnd + 1, True);
+     If TagStart > 0 then
+     Begin
+       TagEnd := ScanFF(FileContent, '</MainSource>', TagStart + 1, False);
+       UnitName := Trim(Copy(FileContent, TagStart, TagEnd - TagStart));
+       UnitName := ExtractFilePath(FileName) + UnitName;
+       DPROJ_ProjSource := UnitName;
+     end;
+
+     exit;   // no Pascal comments in XML anyway
+  end;
 
   Repeat
     TagStart := ScanFF(FileContent, AOU_Tag(1), TagEnd + 1, True);
