@@ -178,6 +178,9 @@ end;
 
 // PROBLEM: at least in XE2 there is no Project -> View Source notification
 
+{$Define XE2_String_2xFree_Crash_WorkAround_1}
+{.$Define XE2_String_2xFree_Crash_WorkAround_2}
+
 procedure TOpenFileIDENotifier.FileNotification(
   NotifyCode: TOTAFileNotification; const FileName: string;
   var Cancel: Boolean);
@@ -189,14 +192,19 @@ Var
   FileNameToOpen: string;
   EndTag: string;
 begin
-
   // Problem #2 hack
   if NotifyCode = ofnFileOpened then
-     if DPROJ_Opening > '' then
+     if (DPROJ_Opening > '') and (DPROJ_ProjSource > '') then
        if FileName = DPROJ_Opening then
        begin
           DPROJ_Opening := '';
+{$IfNDef XE2_String_2xFree_Crash_WorkAround_1}
           FileNotification(ofnFileOpening, DPROJ_ProjSource, Cancel);
+{$Else}
+          UnitName := DPROJ_ProjSource;
+          DPROJ_ProjSource := '';
+          FileNotification(ofnFileOpening, UnitName, Cancel);
+{$EndIf}
           exit;
        end;
 
@@ -205,23 +213,40 @@ begin
   If Not FileExists(FileName) Then
     Exit;
 
+{$IfNDef XE2_String_2xFree_Crash_WorkAround_2}
   // no Problem #2 -> no hack needed
+  // or either hack is engaged - no second hack being needed either
   if DPROJ_ProjSource > '' then
     if FileName = DPROJ_ProjSource then
     begin
       DPROJ_Opening := '';
-      DPROJ_ProjSource := '';
+      DPROJ_ProjSource := '';  // the filename shared string var actually gets cleared here!!!
     end;
+{$EndIf}
 
   TagEnd := 0;
-  FileContent := TFile.ReadAllText(FileName);
+  FileContent := TFile.ReadAllText(FileName);  // <=== Here: CRASH! on the nested call for DPR in XE2
+    // _UstrClr was called to wipe the string, shared with FileName, without checking the sharing
+    // TPath.HasPathValidColon ( Self.DPK-File ) -> _UStrArrayClr
+
   // re-reading file into TStringList on every REPEAT-UNTIL iteration was crazy
   // calling TStringList.GetText thrice on every iteration was crazy
   // also TStringList is slow and heavy (heap fragmentation)
 
+{$IfDef XE2_String_2xFree_Crash_WorkAround_2}
+  if DPROJ_ProjSource > '' then
+    if FileName = DPROJ_ProjSource then
+    begin
+      DPROJ_Opening := '';
+      DPROJ_ProjSource := '';  // Here after the ReadAllText call it is safe
+    end;
+{$EndIf}
+
+
   // Problem #2 hack registering
   if EndsText('.dproj', FileName) then begin
      DPROJ_Opening := FileName;
+     DPROJ_ProjSource := '';
 
      TagStart := ScanFF(FileContent, '<MainSource>', TagEnd + 1, True);
      If TagStart > 0 then
