@@ -47,7 +47,7 @@ begin
   if EventKind = 1 then begin
 
 {$IfDef XE2_String_2xFree_Crash_WorkAround_3}
-    if not TFile.Exists(FileName) then exit; // the mere presence of this call seem to fix it
+    if not TFile.Exists(FileName) then exit; // the mere presence of this call seems to fix it
 {$EndIf}
     if not FileExists(FileName) then begin
        Writeln('ERROR: file not found: ', FileName);
