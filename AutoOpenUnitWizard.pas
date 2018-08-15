@@ -382,6 +382,10 @@ begin
     for DirName in Dirs do
     begin
       UnitFileName := TPath.Combine(DirName, UnitName);
+      // ExpandFileName - remove things like xxx\..\yyyy
+      //    that makes Delphi IDE open one file many times
+      //    delusioning those were DIFFERENT files!
+      UnitFileName := TPath.GetFullPath(UnitFileName);
       If FileExists(UnitFileName) then
       Begin
         Result := UnitFileName;
