@@ -1,7 +1,7 @@
 // -------------------------------------------------------------------------
 //
 //                         Automatically open units
-//                            By Yoav Abrahami
+//       Initial version on Borland CodeCentral - by Yoav Abrahami
 //
 // This wizard automatically opens units when before a unit is opened.
 // It is used to open units that are base units for inherited forms.
@@ -9,6 +9,12 @@
 // { A utoOpenUnit someunitname}
 //
 // -------------------------------------------------------------------------
+// changes by Arioch:
+//  * some updates for XE2 Delphi
+//  * support for the comment in DPR/DPK files
+//  * support for paths in the comment, not merely unit names
+//  **  still .pas extension is always added, should not be put into the comment
+//  * support for (* ... *) comments - if the aforementioned paths contain "}"
 
 {$T+}
 {$PointerMath ON}
@@ -81,7 +87,7 @@ Type
   Private
     DPROJ_Opening, DPROJ_ProjSource: string;
 
-    Function FindUnit(UnitName: string): string;
+    Function FindUnit(UnitName: string; FirstPaths: string = ''): string;
   Public
     procedure FileNotification(NotifyCode: TOTAFileNotification;
       const FileName: string; var Cancel: Boolean);
@@ -274,7 +280,17 @@ begin
     Begin
       TagEnd := ScanFF(FileContent, EndTag, TagStart + 1, False);
       UnitName := Trim(Copy(FileContent, TagStart, TagEnd - TagStart));
-      FileNameToOpen := FindUnit(UnitName);
+
+      if UnitName = ''
+      then FileNameToOpen := ''
+      else begin
+        if (UnitName[1] = '"') or (UnitName[1] = '''') then
+           UnitName := AnsiDequotedStr(UnitName, UnitName[1]);
+        if EndsText('.pas', UnitName) then // always added later
+           SetLength(UnitName, Length(UnitName)-Length('.pas'));
+
+        FileNameToOpen := FindUnit(UnitName, ExtractFilePath(FileName));
+      end;
 
       If FileNameToOpen <> '' then
         (BorlandIDEServices as IOTAActionServices).OpenFile(FileNameToOpen);
@@ -282,7 +298,14 @@ begin
   Until TagStart = 0;
 end;
 
-function TOpenFileIDENotifier.FindUnit(UnitName: string): string;
+// TO DO: search through all the files (folders of files?) in the current Project,
+//    and then in the current Project Group
+// TO DO: custom config files to add extra projgroups/folders to search
+
+// FirstPaths should be a ;-separated list of folders, initially only being
+//   the current file being opened, then perhaps to add more (custom settings, etc).
+// This should provide for relative paths in the "unit name" (unless those paths contain "}")
+function TOpenFileIDENotifier.FindUnit(UnitName, FirstPaths: string): string;
 Var
   DelphiPath: string;
 
@@ -305,10 +328,16 @@ Var
       if Proj<>nil then
         SearchPath:=Proj.GetProjectOptions.GetOptionValue('UnitDir');
     end;
-    Path:=LibPath+';'+BrowsePath+';'+SearchPath;
+    if FirstPaths > '' then
+       if FirstPaths[Length(FirstPaths)] <> ';' then
+          FirstPaths := FirstPaths + ';';
+    Path:=FirstPaths + LibPath+';'+BrowsePath+';'+SearchPath;
     if Proj<>nil then
       Path:=ExtractFileDir(Proj.FileName)+';'+Path;
+
     Path:=StringReplace(Path,'$(DELPHI)',DelphiPath,[rfReplaceAll,rfIgnoreCase]);
+    Path:=StringReplace(Path,'$(BDS)',DelphiPath,[rfReplaceAll,rfIgnoreCase]);
+//TODO: Use OTA to get environment vars (built-in ones are not stored in the Registry)
 
     Curr:=PChar(Path);
     Next:=Curr;
@@ -321,9 +350,10 @@ Var
         Dir:=Curr;
       if Dir<>'' then
       begin
-        Dir:=ExpandFileName(Dir);
-        if AnsiLastChar(Dir)^<>'\' then
-          Dir:=Dir+'\';
+        Dir := IncludeTrailingBackslash(ExpandFileName(Dir));
+//        Dir:=ExpandFileName(Dir);
+//        if AnsiLastChar(Dir)^<>'\' then
+//          Dir:=Dir+'\';
         Dirs.Add(Dir);
       end;
       Curr:=Next+1;
@@ -331,19 +361,33 @@ Var
   End;
 Var
   Dirs: TStringList;
-  I: Integer;
+  DirName, UnitFileName: string;
+//  I: Integer;
 begin
   Result := '';
+
+  UnitName := UnitName + '.pas';
+  if not IsRelativePath(UnitName) then
+  begin
+    if FileExists(UnitName) then
+       Result := UnitName;
+    exit;
+  end;
+
   DelphiPath:=ExtractFileDir(ExtractFileDir(Application.ExeName));
   Dirs := TStringList.Create;
   Try
     GetSearchDirs(Dirs);
-    For I := 0 to Dirs.Count - 1 do
-      If FileExists(IncludeTrailingBackslash(Dirs[i]) + UnitName + '.pas') then
+//    For I := 0 to Dirs.Count - 1 do
+    for DirName in Dirs do
+    begin
+      UnitFileName := TPath.Combine(DirName, UnitName);
+      If FileExists(UnitFileName) then
       Begin
-        Result := IncludeTrailingBackslash(Dirs[i]) + UnitName + '.pas';
+        Result := UnitFileName;
         Exit;
       End;
+    end;  
   Finally
     Dirs.Free;
   End;
