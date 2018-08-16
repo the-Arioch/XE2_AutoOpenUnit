@@ -25,10 +25,7 @@ unit AutoOpenUnitWizard;
 interface
 
 Uses
-  SysUtils, Classes, ToolsAPI,
-//  menus, dialogs, consts, contnrs, registry, windows,
-  Forms, // Application
-  StrUtils;
+  ToolsAPI;
 
 Type
   TAutoOpenUnitExpert = class(TNotifierObject, IOTAWizard)
@@ -47,7 +44,9 @@ Type
 Procedure Register;
 
 implementation
-uses IOUtils;
+uses
+  SysUtils, StrUtils, Classes, IOUtils,
+  Forms; // for the Application var
 
 Procedure Register;
 Begin
@@ -179,10 +178,21 @@ end;
 //   there are notifications for .dproj, .dsk, .groupproj
 //   but there is just NO notifications for auto-loaded .dpr !!!
 
-// PROBLEM: at least in XE2 when you open .DPROJ file there comes
+// (solved): at least in XE2 when you open .DPROJ file there comes
 //   NO notification about opening .DPR or .DPK file at all!!!
 
-// PROBLEM: at least in XE2 there is no Project -> View Source notification
+// (wont-fix): at least in XE2 there is no Project -> View Source notification
+//    but perhaps who cares?
+
+// PROBLEM at least in XE2 when re-opening PAS unit there is an IDE exception
+//   like "Project bds.exe raised exception
+//   class EClassNotFound with message 'Ancestor for 'TxxxxxxxForm' not found".
+// then there would be no ...OpenING notification for the unit, only ...OpenED.
+//   both DFMs are textual, not binary,
+//   comments after unit names in DPR seem changing nothing
+// Happens when you do it via menu File -> Reopen -> (unit with form)
+//   but if you do Project -> View Source, step on the unit name and
+//   press Ctrl+Enter - then everything works as supposed to.
 
 {$Define XE2_String_2xFree_Crash_WorkAround_1}
 {.$Define XE2_String_2xFree_Crash_WorkAround_2}
@@ -286,8 +296,6 @@ begin
       else begin
         if (UnitName[1] = '"') or (UnitName[1] = '''') then
            UnitName := AnsiDequotedStr(UnitName, UnitName[1]);
-        if EndsText('.pas', UnitName) then // always added later
-           SetLength(UnitName, Length(UnitName)-Length('.pas'));
 
         FileNameToOpen := FindUnit(UnitName, ExtractFilePath(FileName));
       end;
@@ -362,12 +370,25 @@ Var
 Var
   Dirs: TStringList;
   DirName, UnitFileName: string;
-//  I: Integer;
+
+  // XE2 can't properly handle driveless root-based relative paths
+  function FixedTPathCombine(const p1, p2: string): string;
+  begin
+    Assert( not TPath.IsDriveRooted(p2) );
+
+    if IsRelativePath(p2) or not TPath.IsDriveRooted(p1) then
+       Exit(TPath.Combine( p1, p2 ));
+
+    Result := p1[1] + ':' + p2;
+  end;
+
 begin
   Result := '';
 
-  UnitName := UnitName + '.pas';
-  if not IsRelativePath(UnitName) then
+  if not EndsText('.pas', UnitName) then
+     UnitName := UnitName + '.pas';
+//  if not IsRelativePath(UnitName) then   -- does not work with root-relative paths "\folder1\folder2..."
+  if TPath.IsDriveRooted(UnitName) then
   begin
     if FileExists(UnitName) then
        Result := UnitName;
@@ -381,7 +402,7 @@ begin
 //    For I := 0 to Dirs.Count - 1 do
     for DirName in Dirs do
     begin
-      UnitFileName := TPath.Combine(DirName, UnitName);
+      UnitFileName := FixedTPathCombine(DirName, UnitName);
       // ExpandFileName - remove things like xxx\..\yyyy
       //    that makes Delphi IDE open one file many times
       //    delusioning those were DIFFERENT files!
